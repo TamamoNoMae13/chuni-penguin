@@ -223,7 +223,7 @@ class GuessLeaderboardView(PaginationView):
 
 class RetryGameButton(
     discord.ui.DynamicItem[discord.ui.Button],
-    template=r"retryguess(?P<mode>[0123]):(?P<difficulty>\d+):(?P<questions>\d+):(?P<score>\d*):(?P<time>\d+):(?P<wrong>\d*):(?P<hardcore>[01]):(?P<genres>[\d,]*)(?::(?P<volume>\d+))?(?::(?P<levels>[\d\-+.,]*))?(?::(?P<seed>[A-NP-Z1-9]{8})?)?",
+    template=r"retryguess(?P<mode>[0123]):(?P<difficulty>\d+):(?P<questions>\d+):(?P<score>\d*):(?P<time>\d+):(?P<wrong>\d*):(?P<flags>[0-3]):(?P<genres>[\d,]*)(?::(?P<volume>\d+))?(?::(?P<levels>[\d\-+.,]*))?(?::(?P<seed>[A-NP-Z1-9]{8})?)?",
 ):
     def __init__(
         self,
@@ -235,6 +235,7 @@ class RetryGameButton(
         time: int,
         wrong: int | None,
         hardcore: bool,
+        all_correct: bool = False,
         genres: list[Genre] | None,
         levels: list[Level | LevelRange] | None,
         volume: int,
@@ -260,7 +261,8 @@ class RetryGameButton(
             str(score) if score is not None else "",
             str(time),
             str(wrong) if wrong is not None else "",
-            "1" if hardcore else "0",
+            # Bitfield: 1 = hardcore, 2 = all-correct. Old buttons only have 0/1.
+            str((1 if hardcore else 0) | (2 if all_correct else 0)),
             ",".join([str(g.value) for g in genres]) if genres else "",
             str(volume),
             ",".join([str(level) for level in levels]) if levels else "",
@@ -287,6 +289,7 @@ class RetryGameButton(
         self.time = time
         self.wrong = wrong
         self.hardcore = hardcore
+        self.all_correct = all_correct
         self.genres = genres
         self.volume = volume
         self.levels = levels
@@ -317,7 +320,9 @@ class RetryGameButton(
         score = int(match["score"]) if match["score"] else None
         time = int(match["time"])
         wrong = int(match["wrong"]) if match["wrong"] else None
-        hardcore = match["hardcore"] == "1"
+        flags = int(match["flags"])
+        hardcore = bool(flags & 1)
+        all_correct = bool(flags & 2)
         genres = (
             [Genre(int(x)) for x in match["genres"].split(",")]
             if match["genres"]
@@ -348,6 +353,7 @@ class RetryGameButton(
             time=time,
             wrong=wrong,
             hardcore=hardcore,
+            all_correct=all_correct,
             genres=genres,
             volume=volume,
             levels=levels,
@@ -449,6 +455,7 @@ class RetryGameButton(
                 time_per_question=self.time,
                 wrong_answers_limit=self.wrong,
                 hardcore_mode=self.hardcore,
+                all_correct_mode=self.all_correct,
                 genres=self.genres,
                 volume=self.volume,
                 levels=self.levels,

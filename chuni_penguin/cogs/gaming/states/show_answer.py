@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import io
 from typing import TYPE_CHECKING, override
 
@@ -25,12 +26,32 @@ if TYPE_CHECKING:
     from chuni_penguin.cogs.gaming._session import GuessingGameSession
 
 
+async def _mark_correct(answers: list[tuple[discord.Message, float]]):
+    # Reactions are only added once the question is over, so they can't leak the
+    # answer to other players.
+    async def react(message: discord.Message):
+        with contextlib.suppress(discord.HTTPException):
+            await message.add_reaction("✅")
+
+    await asyncio.gather(*[react(message) for message, _ in answers])
+
+
+def _format_others(answers: list[tuple[discord.Message, float]]) -> str:
+    """e.g. " Also correct: @B (2.10s), @C (3.41s)" for everyone after the first."""
+    if len(answers) <= 1:
+        return ""
+
+    others = ", ".join(
+        f"{message.author.mention} ({seconds:.2f}s)" for message, seconds in answers[1:]
+    )
+    return f"\nAlso correct: {others}"
+
+
 class ShowAnswerState(GuessingGameState):
     __slots__ = (
-        "accepted_answer",
         "aliases",
         "answer_image",
-        "guess_time",
+        "answers",
         "session",
         "skipped",
         "song",
@@ -43,8 +64,7 @@ class ShowAnswerState(GuessingGameState):
         song: Song,
         aliases: list[CachedAlias],
         answer_image: io.BufferedIOBase,
-        accepted_answer: discord.Message | None,
-        guess_time: float | None = None,
+        answers: list[tuple[discord.Message, float]],
         *,
         timed_out: bool = False,
         skipped: bool = False,
@@ -53,8 +73,7 @@ class ShowAnswerState(GuessingGameState):
         self.song = song
         self.aliases = aliases
         self.answer_image = answer_image
-        self.accepted_answer = accepted_answer
-        self.guess_time = guess_time
+        self.answers = answers
         self.timed_out = timed_out
         self.skipped = skipped
 
@@ -62,18 +81,16 @@ class ShowAnswerState(GuessingGameState):
     async def __call__(self) -> "GuessingGameState | None":
         from chuni_penguin.cogs.gaming._session import GuessingGameType
 
-        if self.accepted_answer is not None:
-            accepted_user = self.accepted_answer.author
+        guess_time: float | None = None
 
-            await self.accepted_answer.add_reaction("✅")
-            await self.session.increment_score(accepted_user.id)
+        if len(self.answers) > 0:
+            first_answer, guess_time = self.answers[0]
+            accepted_user = first_answer.author
 
-            if accepted_user.id not in self.session.scores:
-                self.session.scores[accepted_user.id] = 1
-            else:
-                self.session.scores[accepted_user.id] += 1
+            await _mark_correct(self.answers)
+            await self.session.award_points(self.answers)
 
-            content_lower = self.accepted_answer.content.lower()
+            content_lower = first_answer.content.lower()
             (_, accuracy, _) = rapidfuzz.process.extractOne(
                 content_lower,
                 [alias.alias for alias in self.aliases],
@@ -82,6 +99,7 @@ class ShowAnswerState(GuessingGameState):
 
             content = (
                 f"{accepted_user.mention} has the correct answer ({accuracy:.2f}%)!"
+                + _format_others(self.answers)
             )
             color = discord.Color.green()
         elif self.timed_out:
@@ -111,8 +129,8 @@ class ShowAnswerState(GuessingGameState):
         )
         embed.set_image(url="attachment://image.webp")
 
-        if self.guess_time is not None:
-            embed.set_footer(text=f"Guessed in {self.guess_time:.2f} seconds")
+        if guess_time is not None:
+            embed.set_footer(text=f"Guessed in {guess_time:.2f} seconds")
 
         if self.session.stopped_by:
             next_state = EndGameUserCanceled(self.session)
@@ -147,9 +165,8 @@ class ShowAnswerState(GuessingGameState):
 
 class ShowCharacterAgeAnswerState(GuessingGameState):
     __slots__ = (
-        "accepted_answer",
+        "answers",
         "character",
-        "guess_time",
         "session",
         "skipped",
         "timed_out",
@@ -159,33 +176,31 @@ class ShowCharacterAgeAnswerState(GuessingGameState):
         self,
         session: "GuessingGameSession",
         character: Character,
-        accepted_answer: discord.Message | None,
-        guess_time: float | None = None,
+        answers: list[tuple[discord.Message, float]],
         *,
         timed_out: bool = False,
         skipped: bool = False,
     ) -> None:
         self.session = session
         self.character = character
-        self.accepted_answer = accepted_answer
-        self.guess_time = guess_time
+        self.answers = answers
         self.timed_out = timed_out
         self.skipped = skipped
 
     @override
     async def __call__(self) -> "GuessingGameState | None":
-        if self.accepted_answer is not None:
-            accepted_user = self.accepted_answer.author
+        guess_time: float | None = None
 
-            await self.accepted_answer.add_reaction("✅")
-            await self.session.increment_score(accepted_user.id)
+        if len(self.answers) > 0:
+            first_answer, guess_time = self.answers[0]
+            accepted_user = first_answer.author
 
-            if accepted_user.id not in self.session.scores:
-                self.session.scores[accepted_user.id] = 1
-            else:
-                self.session.scores[accepted_user.id] += 1
+            await _mark_correct(self.answers)
+            await self.session.award_points(self.answers)
 
-            content = f"{accepted_user.mention} has the correct answer!"
+            content = f"{accepted_user.mention} has the correct answer!" + _format_others(
+                self.answers
+            )
             color = discord.Color.green()
         elif self.timed_out:
             content = "Time's up!"
@@ -207,8 +222,8 @@ class ShowCharacterAgeAnswerState(GuessingGameState):
         )
         # embed.set_image(url="attachment://image.webp")
 
-        if self.guess_time is not None:
-            embed.set_footer(text=f"Guessed in {self.guess_time:.2f} seconds")
+        if guess_time is not None:
+            embed.set_footer(text=f"Guessed in {guess_time:.2f} seconds")
 
         if self.session.stopped_by:
             next_state = EndGameUserCanceled(self.session)

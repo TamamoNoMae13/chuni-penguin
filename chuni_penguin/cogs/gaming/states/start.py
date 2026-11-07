@@ -66,6 +66,9 @@ class StartState(GuessingGameState):
         if self.session.hardcore_mode:
             embed.add_field(name="Hardcore mode", value="Enabled", inline=True)
 
+        if self.session.all_correct_mode:
+            embed.add_field(name="All-correct mode", value="Enabled", inline=True)
+
         if (
             self.session.genres is not None
             and self.session.game_type != GuessingGameType.CHARACTER_AGE

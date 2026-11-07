@@ -79,6 +79,9 @@ async def end_game(
     if session.hardcore_mode:
         embed.add_field(name="Hardcore mode", value="Enabled", inline=True)
 
+    if session.all_correct_mode:
+        embed.add_field(name="All-correct mode", value="Enabled", inline=True)
+
     if session.genres is not None:
         embed.add_field(
             name="Genres", value=", ".join([str(g) for g in session.genres])
@@ -123,6 +126,7 @@ async def end_game(
         time=session.time_per_question,
         wrong=session.wrong_answers_limit,
         hardcore=session.hardcore_mode,
+        all_correct=session.all_correct_mode,
         genres=session.genres,
         levels=session.levels,
         volume=session.volume,
@@ -135,6 +139,7 @@ async def end_game(
         time=session.time_per_question,
         wrong=session.wrong_answers_limit,
         hardcore=session.hardcore_mode,
+        all_correct=session.all_correct_mode,
         genres=session.genres,
         levels=session.levels,
         volume=session.volume,

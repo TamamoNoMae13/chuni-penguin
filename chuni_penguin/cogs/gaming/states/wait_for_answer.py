@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import io
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, override
 
@@ -116,11 +115,11 @@ class WaitForAnswerState(GuessingGameSkippableState):
                 create_answer_check(self.session, self.aliases)
             )
 
-            start_time = time.perf_counter_ns()
-            msg = await self._task
-            end_time = time.perf_counter_ns()
+            answers = await self._task
 
-            guess_time = (end_time - start_time) / 1_000_000_000
+            if len(answers) == 0:
+                raise TimeoutError
+
             self.session.questions_timed_out = 0
 
             return ShowAnswerState(
@@ -128,10 +127,21 @@ class WaitForAnswerState(GuessingGameSkippableState):
                 self.song,
                 self.aliases,
                 self.answer_image,
-                msg,
-                guess_time,
+                answers,
             )
         except asyncio.CancelledError:
+            # Skipped during the all-correct grace period: keep the answers.
+            if len(self.session.current_answers) > 0:
+                self.session.questions_timed_out = 0
+
+                return ShowAnswerState(
+                    self.session,
+                    self.song,
+                    self.aliases,
+                    self.answer_image,
+                    list(self.session.current_answers),
+                )
+
             self.session.wrong_answers += 1
             self.session.questions_timed_out = 0
 
@@ -140,7 +150,7 @@ class WaitForAnswerState(GuessingGameSkippableState):
                 self.song,
                 self.aliases,
                 self.answer_image,
-                None,
+                [],
                 skipped=True,
             )
         except TimeoutError:
@@ -155,7 +165,7 @@ class WaitForAnswerState(GuessingGameSkippableState):
                 self.song,
                 self.aliases,
                 self.answer_image,
-                None,
+                [],
                 timed_out=True,
             )
         finally:
@@ -188,22 +198,27 @@ class WaitForCharacterAgeAnswerState(GuessingGameSkippableState):
                 create_character_age_answer_check(self.character.ages)  # pyright: ignore[reportArgumentType]
             )
 
-            start_time = time.perf_counter_ns()
-            msg = await self._task
-            end_time = time.perf_counter_ns()
+            answers = await self._task
 
-            guess_time = (end_time - start_time) / 1_000_000_000
+            if len(answers) == 0:
+                raise TimeoutError
+
             self.session.questions_timed_out = 0
 
-            return ShowCharacterAgeAnswerState(
-                self.session, self.character, msg, guess_time
-            )
+            return ShowCharacterAgeAnswerState(self.session, self.character, answers)
         except asyncio.CancelledError:
+            if len(self.session.current_answers) > 0:
+                self.session.questions_timed_out = 0
+
+                return ShowCharacterAgeAnswerState(
+                    self.session, self.character, list(self.session.current_answers)
+                )
+
             self.session.wrong_answers += 1
             self.session.questions_timed_out = 0
 
             return ShowCharacterAgeAnswerState(
-                self.session, self.character, None, skipped=True
+                self.session, self.character, [], skipped=True
             )
         except TimeoutError:
             if self.session.last_question_was_answered:
@@ -213,7 +228,7 @@ class WaitForCharacterAgeAnswerState(GuessingGameSkippableState):
                 self.session.questions_timed_out += 1
 
             return ShowCharacterAgeAnswerState(
-                self.session, self.character, None, timed_out=True
+                self.session, self.character, [], timed_out=True
             )
         finally:
             self.session.questions_done += 1

@@ -3,6 +3,7 @@ import contextlib
 import io
 import operator
 import random
+import time
 import traceback
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
@@ -41,6 +42,10 @@ if TYPE_CHECKING:
     from chuni_penguin.bot import ChuniBot
 
 
+# How long to keep accepting answers after the first correct one in all-correct mode.
+ALL_CORRECT_GRACE_SECONDS = 3
+
+
 class GuessingGameType(Enum):
     IMAGE = "Jacket"
     VOICE_MESSAGE = "Audio"
@@ -73,8 +78,11 @@ class GuessingGameSession:
         "_question_state_cls",
         "_song_ids",
         "_tasks",
+        "all_correct_mode",
+        "current_answers",
         "ctx",
         "difficulty",
+        "firsts",
         "genres",
         "hardcore_mode",
         "last_question_was_answered",
@@ -105,6 +113,7 @@ class GuessingGameSession:
         time_per_question: int = 20,
         wrong_answers_limit: int | None = None,
         hardcore_mode: bool = False,
+        all_correct_mode: bool = False,
         genres: list[Genre] | None = None,
         levels: list[Level | LevelRange] | None = None,
         volume: int = 15,
@@ -127,6 +136,9 @@ class GuessingGameSession:
 
         self.score_limit: int | None = score_limit
         self.scores: dict[int, int] = {}
+        # Secondary score, only tracked in all-correct mode: how many times each
+        # player was the first to answer. Used to break ties on the primary score.
+        self.firsts: dict[int, int] = {}
 
         self.wrong_answers_limit: int | None = wrong_answers_limit
         self.wrong_answers: int = 0
@@ -135,6 +147,12 @@ class GuessingGameSession:
 
         self.hardcore_mode: bool = hardcore_mode
         self._hardcore_mode_ignores: set[int] = set()
+
+        # All-correct mode: everyone who answers correctly within a short grace
+        # period after the first correct answer gets a point. Only the first one
+        # counts towards the server leaderboard.
+        self.all_correct_mode: bool = all_correct_mode
+        self.current_answers: list[tuple[discord.Message, float]] = []
 
         self.genres: list[Genre] | None = genres
         self.levels: list[Level | LevelRange] | None = levels
@@ -585,27 +603,79 @@ class GuessingGameSession:
 
         await self.bot.database.writer.execute(stmt)
 
+    def ranked_players(self) -> list[tuple[int, int]]:
+        """Players sorted by score, with ties broken by the number of firsts."""
+        return sorted(
+            self.scores.items(),
+            key=lambda item: (item[1], self.firsts.get(item[0], 0)),
+            reverse=True,
+        )
+
+    async def award_points(self, answers: list[tuple[discord.Message, float]]):
+        """Give points for one question. ``answers`` is ordered by answer time.
+
+        Everyone in ``answers`` gets a session point, but only the first one gets
+        a leaderboard point (and a "first" in all-correct mode).
+        """
+        if len(answers) == 0:
+            return
+
+        first_user_id = answers[0][0].author.id
+
+        await self.increment_score(first_user_id)
+
+        if self.all_correct_mode:
+            self.firsts[first_user_id] = self.firsts.get(first_user_id, 0) + 1
+
+        for message, _ in answers:
+            user_id = message.author.id
+            self.scores[user_id] = self.scores.get(user_id, 0) + 1
+
     def print_score_list(self):
         if len(self.scores) == 0:
             return "No one got any points."
 
         score_list = ""
 
-        for user_id, score in sorted(
-            self.scores.items(), key=lambda item: item[1], reverse=True
-        ):
+        for user_id, score in self.ranked_players():
             score_list += f"<@{user_id}> has {score} point"
 
             if score != 1:
                 score_list += "s"
 
+            if self.all_correct_mode:
+                firsts = self.firsts.get(user_id, 0)
+                score_list += f" ({firsts} first"
+
+                if firsts != 1:
+                    score_list += "s"
+
+                score_list += ")"
+
             score_list += "\n"
 
         return score_list
 
-    def create_wait_for_answer_task(self, check: Callable[[discord.Message], bool]):
+    def create_wait_for_answer_task(
+        self, check: Callable[[discord.Message], bool]
+    ) -> "asyncio.Task[list[tuple[discord.Message, float]]]":
+        """Wait for correct answers to the current question.
+
+        The task returns the correct answers as ``(message, seconds taken)`` ordered
+        by answer time, or an empty list if nobody answered in time. Normally that's
+        just the first correct answer. In all-correct mode, the bot keeps collecting
+        for ``ALL_CORRECT_GRACE_SECONDS`` after the first one, silently: nothing is
+        posted or reacted to until the question ends, so the answer isn't leaked.
+
+        Answers collected so far are also kept in ``self.current_answers``, so they
+        aren't lost if the question is skipped during the grace period.
+        """
         self.last_question_was_answered = False
         self._hardcore_mode_ignores.clear()
+        self.current_answers = []
+
+        answers = self.current_answers
+        answered_user_ids: set[int] = set()
 
         def on_typing_check(
             channel: discord.TextChannel | discord.GroupChannel | discord.DMChannel,
@@ -628,13 +698,20 @@ class GuessingGameSession:
             if m.channel != self.channel:
                 return False
 
+            # Each player only scores once per question.
+            if m.author.id in answered_user_ids:
+                return False
+
             is_correct_answer = check(m)
 
             if not is_correct_answer and self.hardcore_mode:
-                reaction_task = asyncio.create_task(m.add_reaction("❌"))
+                # Don't react in all-correct mode: a ❌ would tell everyone else
+                # which answers are wrong.
+                if not self.all_correct_mode:
+                    reaction_task = asyncio.create_task(m.add_reaction("❌"))
 
-                self._tasks.add(reaction_task)
-                reaction_task.add_done_callback(self._tasks.discard)
+                    self._tasks.add(reaction_task)
+                    reaction_task.add_done_callback(self._tasks.discard)
 
                 self._hardcore_mode_ignores.add(m.author.id)
 
@@ -653,8 +730,29 @@ class GuessingGameSession:
         self._tasks.add(typing_task)
         typing_task.add_done_callback(self._tasks.discard)
 
-        return asyncio.create_task(
-            self.bot.wait_for(
-                "message", check=on_message_check, timeout=self.time_per_question
-            )
-        )
+        async def collect_answers() -> list[tuple[discord.Message, float]]:
+            start = time.perf_counter()
+            deadline = start + self.time_per_question
+
+            while (remaining := deadline - time.perf_counter()) > 0:
+                try:
+                    message = await self.bot.wait_for(
+                        "message", check=on_message_check, timeout=remaining
+                    )
+                except TimeoutError:
+                    break
+
+                answered_user_ids.add(message.author.id)
+                answers.append((message, time.perf_counter() - start))
+
+                if not self.all_correct_mode:
+                    break
+
+                if len(answers) == 1:
+                    deadline = min(
+                        deadline, time.perf_counter() + ALL_CORRECT_GRACE_SECONDS
+                    )
+
+            return list(answers)
+
+        return asyncio.create_task(collect_answers())

@@ -38,6 +38,7 @@ class GuessArguments:
     time: int
     wrong: int | None
     hardcore: bool
+    all_correct: bool
     genres: list[Genre] | None
     volume: int
     levels: list[Level | LevelRange] | None
@@ -71,6 +72,7 @@ class GamingCog(commands.Cog, name="Games"):
         parser.add_argument("-t", "--time", type=int, required=False, default=MISSING)
         parser.add_argument("-w", "--wrong", type=int, required=False, default=None)
         parser.add_argument("-h", "--hardcore", action="store_true")
+        parser.add_argument("-a", "--all", action="store_true", dest="all_correct")
         parser.add_argument("-g", "--genre", type=str, nargs="*")
         parser.add_argument("-v", "--volume", type=int, required=False, default=15)
         parser.add_argument(
@@ -92,6 +94,7 @@ class GamingCog(commands.Cog, name="Games"):
         time: int = args.time
         wrong: int | None = args.wrong
         hardcore: bool = args.hardcore
+        all_correct: bool = args.all_correct
         genre: list[str] | None = args.genre
         levels: list[Level | LevelRange] | None = args.levels
         volume: int = args.volume
@@ -123,6 +126,7 @@ class GamingCog(commands.Cog, name="Games"):
             time,
             wrong,
             hardcore,
+            all_correct,
             await asyncio.gather(*[GenreConverter().convert(ctx, x) for x in genre])
             if genre is not None
             else None,
@@ -167,6 +171,7 @@ class GamingCog(commands.Cog, name="Games"):
         `-t`, `--time`: The time (in seconds) for each question. Default is 20 seconds.
         `-w`, `--wrong`: The number of questions to get wrong before the game is stopped. Default is unlimited.
         `-h`, `--hardcore`: Hardcore mode, each player gets one chance to answer each question correctly.
+        `-a`, `--all`: Everyone who answers correctly gets a point, not just the first. Answers are accepted for a few seconds after the first correct one. Only the first correct answer counts towards the leaderboard, and ties are broken by who was first more often.
         `-g`, `--genre`: Limit song pool to the provided genre. Can specify multiple genres, e.g. `-g original niconico`. **Games played with this option will not be counted towards the leaderboard!**
         `-l`, `--level`: Limit song pool to the provided chart levels. Can specify a level (13+), a chart constant (13.8), or a range (13.5-13.8). Can specify multiple levels, e.g. `-l 13+ 15`. **Games played with this option will not be counted towards the leaderboard!**
         `--seed`: Specify a seed for the game. A seed contains 8 uppercase characters and digits (except `O` and `0`). A seed only gives the same game if all other options are the same. A seed does not guarantee the same game as new songs get added. **Games played with this option will not be counted towards the leaderboard!**
@@ -200,6 +205,7 @@ class GamingCog(commands.Cog, name="Games"):
         `-t`, `--time`: The time (in seconds) for each question. Defaults to the audio length + 5 seconds
         `-w`, `--wrong`: The number of questions to get wrong before the game is stopped. Default is unlimited.
         `-h`, `--hardcore`: Hardcore mode, each player gets one chance to answer each question correctly.
+        `-a`, `--all`: Everyone who answers correctly gets a point, not just the first. Answers are accepted for a few seconds after the first correct one. Only the first correct answer counts towards the leaderboard, and ties are broken by who was first more often.
         `-g`, `--genre`: Limit song pool to the provided genre. Can specify multiple genres, e.g. `-g original niconico`. **Games played with this option will not be counted towards the leaderboard!**
         `-l`, `--level`: Limit song pool to the provided chart levels. Can specify a level (13+), a chart constant (13.8), or a range (13.5-13.8). Can specify multiple levels, e.g. `-l 13+ 15`. **Games played with this option will not be counted towards the leaderboard!**
         `--seed`: Specify a seed for the game. A seed contains 8 uppercase characters and digits (except `O` and `0`). A seed only gives the same game if all other options are the same. A seed does not guarantee the same game as new songs get added. **Games played with this option will not be counted towards the leaderboard!**
@@ -233,6 +239,7 @@ class GamingCog(commands.Cog, name="Games"):
         `-t`, `--time`: The time (in seconds) for each question. Defaults to the audio length + 5 seconds.
         `-w`, `--wrong`: The number of questions to get wrong before the game is stopped. Default is unlimited.
         `-h`, `--hardcore`: Hardcore mode, each player gets one chance to answer each question correctly.
+        `-a`, `--all`: Everyone who answers correctly gets a point, not just the first. Answers are accepted for a few seconds after the first correct one. Only the first correct answer counts towards the leaderboard, and ties are broken by who was first more often.
         `-g`, `--genre`: Limit song pool to the provided genre. Can specify multiple genres, e.g. `-g original niconico`. **Games played with this option will not be counted towards the leaderboard!**
         `-l`, `--level`: Limit song pool to the provided chart levels. Can specify a level (13+), a chart constant (13.8), or a range (13.5-13.8). Can specify multiple levels, e.g. `-l 13+ 15`. **Games played with this option will not be counted towards the leaderboard!**
         `-v`, `--volume`: The starting volume of the audio. Defaults to 15% (can be very loud!)
@@ -282,6 +289,7 @@ class GamingCog(commands.Cog, name="Games"):
                 time_per_question=args.time,
                 wrong_answers_limit=args.wrong,
                 hardcore_mode=args.hardcore,
+                all_correct_mode=args.all_correct,
                 genres=args.genres,
                 volume=args.volume,
                 levels=args.levels,
